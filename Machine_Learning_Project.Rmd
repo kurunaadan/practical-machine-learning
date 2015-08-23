@@ -6,12 +6,31 @@ output: html_document
 ---
 ## Overview
 
+   Physical activity leads to a healthy life. It can reduce potential attacks of diseases like heart attack, type 2 diabetes and so on. Training in an effective way is important factor for a positive impact whereas mistakes during exercises would harm the individual. *Free weights* accounts for most of weight related training exercises. There are two ways to monitior the exercise regimen. One is employing a personal coach and the other is using on-body sensors and analyze the data obtained. It is possible to automatically assess the quality of execution of weight lifting exercises. In this project, we consider the data used by the following paper to find the most influential predictors. 
+
+*Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H.* 
+   **Qualitative Activity Recognition of Weight Lifting Exercises.** Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13)  Stuttgart, Germany: ACM SIGCHI, 2013.
+   
+   The data has 19622 observations taken from six individuals aged between 20-28 years, with little weight lifting experience. They were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: 
+   1) exactly according to the specification (Class A), 
+   2) throwing the elbows to the front (Class B), 
+   3) lifting the dumbbell only halfway (Class C), 
+   4) lowering the dumbbell only halfway (Class D) and 
+   5) throwing the hips to the front (Class E).
+
+Class A corresponds to the specified execution of the exercise, while the other 
+4 classes correspond to common mistakes.  We use machine learning and pattern recognition techniques to detect mistakes and provide feedback on the quality of execution to the user.
+
 ```{r overview, echo=FALSE, warning=FALSE,message=FALSE}
 # Load required libraries
 library(caret)
 library(doParallel)
 library(mlbench)
 library(pander)
+library(kernlab)
+library(gbm)
+library(plyr)
+library(class)
 
 
 # Load required functions
@@ -24,13 +43,21 @@ num.obs <- nrow(raw.training.data)
 ```
 
 ## Exploratory Analysis
-
+ 
+ The following table shows the first three observations with every attribute.
+ 
 ```{r exploratory_analysis, echo=FALSE, results='asis'}
 pander(head(raw.training.data,3))
 
 ```
 
+It can be seen that some varaiables like *kurtosis_picth_belt*, 
+*kurtosis_yaw_belt*, *skewness_roll_belt* etc doesn't have any values at all.
+And few other variables seems to have only NAs. So, we proceed to clean the data 
+first.
+
 ## Cleaning Data 
+
 ```{r clean_data}
 train.file <- "cleaned.rds"
 if (!file.exists(train.file)) {
@@ -57,7 +84,10 @@ saveRDS(object = clean.training.data,file = "cleaned.rds")
 }
 ```
 
+After cleaning the data, only 53 attributes remain out of 160, and we can do some preprocessing to reduce redundant ones further.
+
 ## Preprocessing of Data
+
 ```{r preprocess_data, results='asis'}
 if (file.exists(train.file)) {
 
@@ -72,13 +102,9 @@ nzv <- nearZeroVar(clean.training.data, saveMetrics= TRUE)
 # The code chunk below shows the effect of removing descriptors with absolute 
 # correlations above 0.75.
 descrCor <- cor(clean.training.data[,-53])
-summary(descrCor[upper.tri(descrCor)])
 
 highlyCorDescr <- findCorrelation(descrCor, cutoff = .75)
 clean.training.data <- clean.training.data[,-highlyCorDescr]
-
-descrCor2 <- cor(clean.training.data[,-32])
-summary(descrCor2[upper.tri(descrCor2)])
 
 #Find Linear Dependencies of columns
 # The function findLinearCombos uses the QR decomposition of a matrix to enumerate
@@ -91,7 +117,14 @@ clean.training.data <- clean.training.data[complete.cases(clean.training.data),]
 }
 ```
 
+We calculated the correlation between variables and those who have absolute correlation values above 0.75 are discarded. Only 31 remained and further reduction by finding linear combinations didn't yield any useful results.
+
 ## Training Different Models
+
+  Now, we choose three different "machine learning" models and train them on a 
+small portion (approx. 10%) of data. The models chosen are **Learning Vector Quantization**, **Support Vector Machines with Radial Basis Function Kernel** 
+and **Stochastic Gradient Boosting**
+
 ```{r different_models, results='asis',warning=FALSE, message=FALSE}
 
 set.seed(32323)
@@ -146,7 +179,12 @@ stopCluster(cl)
 
 ```
 
+We do 10-fold cross validation repeating three times on the sample dataset of 
+1000 observations. And we use parallization of the training part effectively 
+using multiple processor cores (here it is 2)
+
 ## Choosing the Best Model
+
 ```{r best_model, echo=FALSE, warning=FALSE}
 # collect resamples
 results <- resamples(list(LVQ=model1, SVM=model2,GBM=model3))
@@ -154,12 +192,16 @@ results <- resamples(list(LVQ=model1, SVM=model2,GBM=model3))
 summary(results)
 # boxplots of results
 bwplot(results)
-# dot plots of results
-dotplot(results)
 ```
 
-## Prediction on Validation Dataset 
+From the plot, it can be seen that **Stochastic Gradient Boosting** model 
+performs the best. Now, let's do a full training.
 
+## Training and Validation  
+
+  We leave the used 1000 observations and consider the remaining data. Divide 
+  70% of data for training and 30% for validation by the chosen best model GBM.
+  
 ```{r test_data_prediction, results='markup', warning=FALSE, message=FALSE}
 inTrain <- createDataPartition(y=remaining.data$classe, p=0.7, list=FALSE)
 training.final <- remaining.data[inTrain,]
@@ -182,6 +224,15 @@ Prediction <- predict(best.model, validation.final[,-32])
 confusionMatrix(Prediction,validation.final$classe)
 ```
 
+GBM model achieves 94% accuracy on the validation data. 
+
 ## Conclusion
 
-## References
+```{r conclusion, results='markup', warning=FALSE, message=FALSE}
+varImp(best.model)
+```
+
+    We can conclude that with only 31 variables, we could reach a reasonable 
+ accuracy. Among them are  **magnet_belt_y**, **pitch_forearm** and 
+ **yaw_belt ** are the highest accurate predictors.
+
