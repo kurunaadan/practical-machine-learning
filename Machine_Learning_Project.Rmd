@@ -1,0 +1,187 @@
+---
+title: "Qualitative Assessment of Weight Lifting Exercises"
+author: "kurunaadan"
+date: "Sunday, August 23, 2015"
+output: html_document
+---
+## Overview
+
+```{r overview, echo=FALSE, warning=FALSE,message=FALSE}
+# Load required libraries
+library(caret)
+library(doParallel)
+library(mlbench)
+library(pander)
+
+
+# Load required functions
+source(file = "clean_NAs.R")
+source(file = "change_to_numeric.R")
+
+# Check if cleaned data is available. If available, skip and jump
+raw.training.data <-  read.csv2(file = "pml-training.csv",sep = ",", header = TRUE,stringsAsFactors=FALSE)
+num.obs <- nrow(raw.training.data)
+```
+
+## Exploratory Analysis
+
+```{r exploratory_analysis, echo=FALSE, results='asis'}
+pander(head(raw.training.data,3))
+
+```
+
+## Cleaning Data 
+```{r clean_data}
+train.file <- "cleaned.rds"
+if (!file.exists(train.file)) {
+clean.training.data <- clean_NAs(raw.training.data)
+clean.training.data <- change_to_numeric(clean.training.data, "kurtosis")
+clean.training.data <- change_to_numeric(clean.training.data, "skewness")
+clean.training.data <- change_to_numeric(clean.training.data, "gyros")
+clean.training.data <- change_to_numeric(clean.training.data, "max")
+clean.training.data <- change_to_numeric(clean.training.data, "min")
+clean.training.data <- clean_NAs(clean.training.data)
+clean.training.data <- change_to_numeric(clean.training.data, "roll_")
+clean.training.data <- change_to_numeric(clean.training.data, "pitch_")
+clean.training.data <- change_to_numeric(clean.training.data, "yaw_")
+clean.training.data <- clean_NAs(clean.training.data)
+clean.training.data$magnet_dumbbell_z <- as.integer(clean.training.data$magnet_dumbbell_z)
+clean.training.data$magnet_forearm_y <- as.integer(clean.training.data$magnet_forearm_y)
+clean.training.data$magnet_forearm_z <- as.integer(clean.training.data$magnet_forearm_z)
+
+clean.training.data <- clean.training.data[,-seq(1:7)]
+
+# Outcome variable
+clean.training.data$classe <- as.factor(clean.training.data$classe)
+saveRDS(object = clean.training.data,file = "cleaned.rds")
+}
+```
+
+## Preprocessing of Data
+```{r preprocess_data, results='asis'}
+if (file.exists(train.file)) {
+
+clean.training.data <- readRDS(file = "cleaned.rds")
+
+# Find near zero variance predictors and eliminate them
+nzv <- nearZeroVar(clean.training.data, saveMetrics= TRUE)
+# Result: From the fourth column of nzv, it is understood that there are no 
+# near-zero-variance variables
+
+#Identifying Correlated Predictors
+# The code chunk below shows the effect of removing descriptors with absolute 
+# correlations above 0.75.
+descrCor <- cor(clean.training.data[,-53])
+summary(descrCor[upper.tri(descrCor)])
+
+highlyCorDescr <- findCorrelation(descrCor, cutoff = .75)
+clean.training.data <- clean.training.data[,-highlyCorDescr]
+
+descrCor2 <- cor(clean.training.data[,-32])
+summary(descrCor2[upper.tri(descrCor2)])
+
+#Find Linear Dependencies of columns
+# The function findLinearCombos uses the QR decomposition of a matrix to enumerate
+# sets of linear combinations (if they exist).
+comboInfo <- findLinearCombos(clean.training.data[,-32])
+# Results show that there are no linear combinations of columns
+
+clean.training.data <- clean.training.data[complete.cases(clean.training.data),]
+# All the 19622 rows are complete rows. no NAs
+}
+```
+
+## Training Different Models
+```{r different_models, results='asis',warning=FALSE, message=FALSE}
+
+set.seed(32323)
+x <- seq(1:num.obs)
+s <- sample(x = x,size = 1000) 
+training.data <- clean.training.data[s,]
+remaining.data <- clean.training.data[-s,]
+
+## Trying three models random lvq, svm and gbm
+
+#control list
+myControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+
+#run model in parallel
+cl <- makeCluster(detectCores())
+registerDoParallel(cl)
+
+set.seed(32323)
+model1_file <- "model1_file_v01.rds"
+if (file.exists(model1_file)) {
+    # Read the model in and assign it to a variable.
+    model1 <- readRDS("model1_file_v01.rds")
+} else {
+    # Otherwise, run the training.
+    model1 <- train(classe~., data = training.data, method='lvq', trControl=myControl)    
+    saveRDS(object = model1,file = "model1_file_v01.rds")
+}
+
+set.seed(32323)
+model2_file <- "model2_file_v01.rds"
+if (file.exists(model2_file)) {
+    # Read the model in and assign it to a variable.
+    model2 <- readRDS("model2_file_v01.rds")
+} else {
+    # Otherwise, run the training.
+    model2 <- train(classe~., data = training.data, method='svmRadial',trControl=myControl)    
+    saveRDS(object = model2,file = "model2_file_v01.rds")
+}
+
+set.seed(32323)
+model3_file <- "model3_file_v01.rds"
+if (file.exists(model3_file)) {
+    # Read the model in and assign it to a variable.
+    model3 <- readRDS("model3_file_v01.rds")
+} else {
+    # Otherwise, run the training.
+    model3 <- train(classe~., data = training.data, method='gbm', trControl=myControl,verbose = FALSE)    
+    saveRDS(object = model3,file = "model3_file_v01.rds")
+}
+
+stopCluster(cl)
+
+```
+
+## Choosing the Best Model
+```{r best_model, echo=FALSE, warning=FALSE}
+# collect resamples
+results <- resamples(list(LVQ=model1, SVM=model2,GBM=model3))
+# summarize the distributions
+summary(results)
+# boxplots of results
+bwplot(results)
+# dot plots of results
+dotplot(results)
+```
+
+## Prediction on Validation Dataset 
+
+```{r test_data_prediction, results='markup', warning=FALSE, message=FALSE}
+inTrain <- createDataPartition(y=remaining.data$classe, p=0.7, list=FALSE)
+training.final <- remaining.data[inTrain,]
+validation.final <- remaining.data[-inTrain,]
+
+#run model in parallel
+cl <- makeCluster(detectCores())
+registerDoParallel(cl)
+
+#control list
+myControl1 <- trainControl(method='cv', number = 3)
+
+best.model <- train(classe~., data = training.final, method='gbm', trControl=myControl1,verbose = FALSE)
+
+stopCluster(cl)
+
+# Confusion Matrix
+
+Prediction <- predict(best.model, validation.final[,-32])
+confusionMatrix(Prediction,validation.final$classe)
+```
+
+## Conclusion
+
+## References
